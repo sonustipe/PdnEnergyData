@@ -261,8 +261,8 @@ test_size = st.sidebar.slider("Test size frac", 0.05, 0.5, 0.2, 0.05)
 poly_degree = st.sidebar.slider("Poly degree", 2, 6, 3, 1)
 skip_outliers_model = st.sidebar.checkbox("Ignore outliers while training", value=True)
 
-TAB_OVERVIEW, TAB_TS, TAB_MODEL, TAB_DL, TAB_HELP = st.tabs(
-    ["Overview", "Time Series", "Modeling", "Downloads", "Help"]
+TAB_OVERVIEW, TAB_TS, TAB_MODEL, TAB_REG, TAB_DL, TAB_HELP = st.tabs(
+    ["Overview", "Time Series", "Modeling", "Regression", "Downloads", "Help"]
 )
 
 with TAB_OVERVIEW:
@@ -521,6 +521,59 @@ with TAB_MODEL:
                     )
             if rows:
                 st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+with TAB_REG:
+    st.subheader("Regression")
+    if not len(df_res) or not numeric_cols:
+        st.info("Upload data with numeric columns.")
+    else:
+        dep_col = st.selectbox("Dependent variable", options=numeric_cols, index=0)
+        indep_opts = [c for c in numeric_cols if c != dep_col]
+        indep_cols = st.multiselect(
+            "Independent variables", options=indep_opts, default=indep_opts[:1]
+        )
+        if not indep_cols:
+            st.info("Select at least one independent variable.")
+        else:
+            df_reg = df_res[[dep_col] + indep_cols].dropna()
+            if len(df_reg) < 5:
+                st.info("Need at least 5 rows after dropping NA.")
+            else:
+                X = df_reg[indep_cols].to_numpy()
+                y = df_reg[dep_col].to_numpy()
+                metrics_r, preds_r, models_r = fit_models(
+                    X, y, test_size=test_size, poly_degree=poly_degree, random_state=42
+                )
+                st.dataframe(metrics_r, use_container_width=True)
+                st.plotly_chart(
+                    px.imshow(
+                        df_reg.corr(),
+                        text_auto=True,
+                        aspect="auto",
+                        title="Correlation",
+                    ),
+                    use_container_width=True,
+                )
+                for c in indep_cols:
+                    st.plotly_chart(
+                        px.scatter(df_reg, x=c, y=dep_col, trendline="ols", title=f"{c} vs {dep_col}"),
+                        use_container_width=True,
+                    )
+                with st.expander("Manual prediction", expanded=False):
+                    mdl_name = st.selectbox("Model", metrics_r["Model"].tolist(), index=0)
+                    inputs = []
+                    for c in indep_cols:
+                        inputs.append(
+                            st.number_input(
+                                c,
+                                value=float(df_reg[c].mean()),
+                                key=f"{c}_input_reg",
+                            )
+                        )
+                    if st.button("Predict", key="predict_reg"):
+                        mdl = models_r[mdl_name]
+                        pred = float(mdl.predict(np.array([inputs]))[0])
+                        st.success(f"Predicted {dep_col}: {pred:.3f}")
 
 with TAB_DL:
     st.subheader("Downloads")
