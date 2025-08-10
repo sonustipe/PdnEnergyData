@@ -456,9 +456,20 @@ with TAB_MODEL:
             ).total_seconds() / (24 * 3600)
             pred_target = float(mdl.predict(np.array([[offset]]))[0])
             rmse_sel = metrics.loc[metrics["Model"] == pick_model, "RMSE"].iloc[0]
-            st.write(
-                f"Target {target_col} prediction {manual_date}: {pred_target:.3f} (±{rmse_sel:.3f} RMSE)"
-            )
+            actual_series = base_m.loc[
+                base_m[date_col] == pd.to_datetime(manual_date), target_col
+            ]
+            if not actual_series.empty:
+                actual_val = float(actual_series.iloc[0])
+                abs_err = abs(pred_target - actual_val)
+                pct_err = abs_err / abs(actual_val) * 100 if actual_val != 0 else np.nan
+                st.write(
+                    f"Target {target_col} prediction {manual_date}: {pred_target:.3f} (actual {actual_val:.3f}, abs error {abs_err:.3f}, % error {pct_err:.2f}%, ±{rmse_sel:.3f} RMSE)"
+                )
+            else:
+                st.write(
+                    f"Target {target_col} prediction {manual_date}: {pred_target:.3f} (±{rmse_sel:.3f} RMSE, actual unavailable)"
+                )
             rows = []
             for c in y_cols:
                 df_s = df_res[[date_col, c]].dropna()
@@ -469,6 +480,9 @@ with TAB_MODEL:
                         {
                             "Series": c,
                             "Prediction": np.nan,
+                            "Actual": np.nan,
+                            "AbsError": np.nan,
+                            "PctError": np.nan,
                             "RMSE": np.nan,
                             "Note": "Insufficient",
                         }
@@ -507,14 +521,38 @@ with TAB_MODEL:
                     pred_c = float(m_c.predict(np.array([[off]]))[0])
                     train_pred = m_c.predict(X_c)
                     rmse_c = float(np.sqrt(np.mean((y_c - train_pred) ** 2)))
+                    actual_c_series = df_s.loc[
+                        df_s[date_col] == pd.to_datetime(manual_date), c
+                    ]
+                    if not actual_c_series.empty:
+                        actual_c = float(actual_c_series.iloc[0])
+                        abs_err_c = abs(pred_c - actual_c)
+                        pct_err_c = (
+                            abs_err_c / abs(actual_c) * 100 if actual_c != 0 else np.nan
+                        )
+                    else:
+                        actual_c = np.nan
+                        abs_err_c = np.nan
+                        pct_err_c = np.nan
                     rows.append(
-                        {"Series": c, "Prediction": pred_c, "RMSE": rmse_c, "Note": ""}
+                        {
+                            "Series": c,
+                            "Prediction": pred_c,
+                            "Actual": actual_c,
+                            "AbsError": abs_err_c,
+                            "PctError": pct_err_c,
+                            "RMSE": rmse_c,
+                            "Note": "",
+                        }
                     )
                 except Exception as e:
                     rows.append(
                         {
                             "Series": c,
                             "Prediction": np.nan,
+                            "Actual": np.nan,
+                            "AbsError": np.nan,
+                            "PctError": np.nan,
                             "RMSE": np.nan,
                             "Note": f"Fail {e}",
                         }
