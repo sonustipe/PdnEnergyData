@@ -185,7 +185,8 @@ df, detected = coerce_dates(df)
 df = numericize(df)
 
 date_col = st.sidebar.selectbox(
-    "Date column", options=df.columns.tolist(), index=df.columns.get_loc(detected)
+    "Date column", options=df.columns.tolist(), index=df.columns.get_loc(detected),
+    key="date_column_select"
 )
 df[date_col] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce")
 df = df.dropna(subset=[date_col])
@@ -200,6 +201,7 @@ with st.sidebar.expander("Clean", expanded=False):
         "Fill missing",
         ["None", "Forward fill", "Backward fill", "Interpolate"],
         index=0,
+        key="fill_missing_strategy",
     )
     if strategy != "None":
         nums = [
@@ -236,11 +238,15 @@ df = df[
 ].sort_values(date_col)
 
 freq_map = {"None": "", "Daily": "D", "Weekly": "W", "Monthly": "M"}
-freq_choice = st.sidebar.selectbox("Resample", list(freq_map.keys()), index=0)
+freq_choice = st.sidebar.selectbox(
+    "Resample", list(freq_map.keys()), index=0, key="resample_freq"
+)
 df_res = resample_df(df, date_col, freq_map[freq_choice])
 
 st.sidebar.subheader("Outliers")
-method = st.sidebar.selectbox("Method", ["zscore", "iqr"], index=1)
+method = st.sidebar.selectbox(
+    "Method", ["zscore", "iqr"], index=1, key="outlier_method"
+)
 z_t = (
     st.sidebar.slider("Z threshold", 2.0, 5.0, 3.0, 0.1) if method == "zscore" else None
 )
@@ -256,7 +262,11 @@ outlier_flags = (
 )
 
 st.sidebar.subheader("Modeling")
-target_col = st.sidebar.selectbox("Target", options=y_cols, index=0) if y_cols else None
+target_col = (
+    st.sidebar.selectbox("Target", options=y_cols, index=0, key="target_column")
+    if y_cols
+    else None
+)
 test_size = st.sidebar.slider("Test size frac", 0.05, 0.5, 0.2, 0.05)
 poly_degree = st.sidebar.slider("Poly degree", 2, 6, 3, 1)
 skip_outliers_model = st.sidebar.checkbox("Ignore outliers while training", value=True)
@@ -435,7 +445,9 @@ with TAB_MODEL:
                 value=base_m[date_col].max().date(),
                 min_value=base_m[date_col].min().date(),
             )
-            pick_model = st.selectbox("Model", metrics["Model"].tolist(), index=0)
+            pick_model = st.selectbox(
+                "Model", metrics["Model"].tolist(), index=0, key="model_pick"
+            )
             if pick_model == "Linear":
                 mdl = LinearRegression()
             elif pick_model == "Poly":
@@ -565,7 +577,9 @@ with TAB_REG:
     if not len(df_res) or not numeric_cols:
         st.info("Upload data with numeric columns.")
     else:
-        dep_col = st.selectbox("Dependent variable", options=numeric_cols, index=0)
+        dep_col = st.selectbox(
+            "Dependent variable", options=numeric_cols, index=0, key="dep_variable"
+        )
         indep_opts = [c for c in numeric_cols if c != dep_col]
         indep_cols = st.multiselect(
             "Independent variables", options=indep_opts, default=indep_opts[:1]
@@ -598,7 +612,9 @@ with TAB_REG:
                         use_container_width=True,
                     )
                 with st.expander("Manual prediction", expanded=False):
-                    mdl_name = st.selectbox("Model", metrics_r["Model"].tolist(), index=0)
+                    mdl_name = st.selectbox(
+                        "Model", metrics_r["Model"].tolist(), index=0, key="reg_model"
+                    )
                     inputs = []
                     for c in indep_cols:
                         inputs.append(
