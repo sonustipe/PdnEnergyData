@@ -315,6 +315,7 @@ with TAB_TS:
                 ma_window,
             ),
             use_container_width=True,
+            key="ts_main_chart",
         )
         with st.expander("Individual series", expanded=False):
             for c in y_cols:
@@ -329,12 +330,14 @@ with TAB_TS:
                         ma_window,
                     ),
                     use_container_width=True,
+                    key=f"ts_series_{c}",
                 )
         if len(y_cols) > 1:
             corr = df_res[y_cols].corr()
             st.plotly_chart(
                 px.imshow(corr, text_auto=True, aspect="auto", title="Correlation"),
                 use_container_width=True,
+                key="ts_correlation",
             )
             norm_df = df_res[[date_col]].copy()
             for c in y_cols:
@@ -351,7 +354,7 @@ with TAB_TS:
                 hovermode="x unified",
                 margin=dict(l=10, r=10, t=40, b=10),
             )
-            st.plotly_chart(fig_norm, use_container_width=True)
+            st.plotly_chart(fig_norm, use_container_width=True, key="ts_normalized")
 
 with TAB_MODEL:
     st.subheader("Modeling")
@@ -420,7 +423,11 @@ with TAB_MODEL:
                     fig_s.update_layout(
                         margin=dict(l=10, r=10, t=40, b=10), hovermode="x unified"
                     )
-                    st.plotly_chart(fig_s, use_container_width=True)
+                    st.plotly_chart(
+                        fig_s,
+                        use_container_width=True,
+                        key=f"model_series_{c}",
+                    )
                     resid_fig = go.Figure()
                     for mname in ("Linear", "Poly", "RandomForest"):
                         if mname in plot_df.columns:
@@ -437,7 +444,11 @@ with TAB_MODEL:
                         hovermode="x unified",
                         margin=dict(l=10, r=10, t=40, b=10),
                     )
-                    st.plotly_chart(resid_fig, use_container_width=True)
+                    st.plotly_chart(
+                        resid_fig,
+                        use_container_width=True,
+                        key=f"model_resid_{c}",
+                    )
                     st.dataframe(met_s, use_container_width=True)
             st.markdown("### Manual prediction")
             manual_date = st.date_input(
@@ -605,11 +616,19 @@ with TAB_REG:
                         title="Correlation",
                     ),
                     use_container_width=True,
+                    key="reg_correlation",
                 )
                 for c in indep_cols:
                     st.plotly_chart(
-                        px.scatter(df_reg, x=c, y=dep_col, trendline="ols", title=f"{c} vs {dep_col}"),
+                        px.scatter(
+                            df_reg,
+                            x=c,
+                            y=dep_col,
+                            trendline="ols",
+                            title=f"{c} vs {dep_col}",
+                        ),
                         use_container_width=True,
+                        key=f"reg_scatter_{c}",
                     )
                 with st.expander("Manual prediction", expanded=False):
                     mdl_name = st.selectbox(
