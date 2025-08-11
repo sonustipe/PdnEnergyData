@@ -611,7 +611,27 @@ with TAB_REG:
                     if st.button("Predict", key="predict_reg"):
                         mdl = models_r[mdl_name]
                         pred = float(mdl.predict(np.array([inputs]))[0])
-                        st.success(f"Predicted {dep_col}: {pred:.3f}")
+                        rmse_sel = metrics_r.loc[
+                            metrics_r["Model"] == mdl_name, "RMSE"
+                        ].iloc[0]
+                        df_match = df_reg.copy()
+                        for col, val in zip(indep_cols, inputs):
+                            df_match = df_match.loc[np.isclose(df_match[col], val)]
+                        if len(df_match):
+                            actual_val = float(df_match[dep_col].iloc[0])
+                            abs_err = abs(pred - actual_val)
+                            pct_err = (
+                                abs_err / abs(actual_val) * 100
+                                if actual_val != 0
+                                else np.nan
+                            )
+                            st.write(
+                                f"Predicted {dep_col}: {pred:.3f} (actual {actual_val:.3f}, abs error {abs_err:.3f}, % error {pct_err:.2f}%, ±{rmse_sel:.3f} RMSE)"
+                            )
+                        else:
+                            st.write(
+                                f"Predicted {dep_col}: {pred:.3f} (±{rmse_sel:.3f} RMSE, actual unavailable)"
+                            )
 
 with TAB_DL:
     st.subheader("Downloads")
