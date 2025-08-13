@@ -185,8 +185,10 @@ df, detected = coerce_dates(df)
 df = numericize(df)
 
 date_col = st.sidebar.selectbox(
-    "Date column", options=df.columns.tolist(), index=df.columns.get_loc(detected),
-    key="date_column_select"
+    "Date column",
+    options=df.columns.tolist(),
+    index=df.columns.get_loc(detected),
+    key="date_column_select",
 )
 df[date_col] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce")
 df = df.dropna(subset=[date_col])
@@ -261,6 +263,17 @@ outlier_flags = (
     else pd.DataFrame()
 )
 
+# Control whether to exclude flagged outliers from charts
+exclude_outliers_viz = st.sidebar.checkbox(
+    "Exclude flagged outliers in charts", value=False, key="viz_exclude_outliers"
+)
+# Dataframe for visualization (optionally masked at outlier points)
+df_viz = df_res.copy()
+if exclude_outliers_viz and not outlier_flags.empty:
+    for _c in y_cols:
+        if _c in outlier_flags.columns:
+            df_viz.loc[outlier_flags[_c].fillna(False), _c] = np.nan
+
 st.sidebar.subheader("Modeling")
 target_col = (
     st.sidebar.selectbox("Target", options=y_cols, index=0, key="target_column")
@@ -277,28 +290,35 @@ TAB_OVERVIEW, TAB_TS, TAB_MODEL, TAB_REG, TAB_DL, TAB_HELP = st.tabs(
 
 with TAB_OVERVIEW:
     st.subheader("Overview")
-    if not len(df_res) or not y_cols:
-        st.info("Upload data and select series.")
+    if not len(df_res):
+        st.info("Upload data to continue.")
     else:
-        rows = []
-        for c in y_cols:
-            vals = pd.to_numeric(df_res[c], errors="coerce")
-            rows.append(
-                {
-                    "Series": c,
-                    "Count": int(vals.count()),
-                    "Mean": vals.mean(),
-                    "Std": vals.std(),
-                    "Min": vals.min(),
-                    "Max": vals.max(),
-                    "Outliers": (
-                        int(outlier_flags[c].sum()) if c in outlier_flags.columns else 0
-                    ),
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-        if len(outlier_flags):
-            st.caption("Outliers are flagged only.")
+        with st.expander("Data Preview (after cleaning & resampling)", expanded=True):
+            st.dataframe(df_res, use_container_width=True)
+        if not y_cols:
+            st.info("Select one or more series in the sidebar to see stats.")
+        else:
+            rows = []
+            for c in y_cols:
+                vals = pd.to_numeric(df_res[c], errors="coerce")
+                rows.append(
+                    {
+                        "Series": c,
+                        "Count": int(vals.count()),
+                        "Mean": vals.mean(),
+                        "Std": vals.std(),
+                        "Min": vals.min(),
+                        "Max": vals.max(),
+                        "Outliers": (
+                            int(outlier_flags[c].sum())
+                            if c in outlier_flags.columns
+                            else 0
+                        ),
+                    }
+                )
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            if len(outlier_flags):
+                st.caption("Outliers are flagged only.")
 
 with TAB_TS:
     st.subheader("Time Series")
@@ -307,10 +327,14 @@ with TAB_TS:
     else:
         st.plotly_chart(
             make_line_plot(
-                df_res,
+                df_viz,
                 date_col,
                 y_cols,
-                outlier_flags if len(outlier_flags) else None,
+                (
+                    None
+                    if exclude_outliers_viz
+                    else (outlier_flags if len(outlier_flags) else None)
+                ),
                 apply_ma_cols,
                 ma_window,
             ),
@@ -319,13 +343,21 @@ with TAB_TS:
         )
         with st.expander("Individual series", expanded=False):
             for c in y_cols:
-                one = df_res[[date_col, c]].dropna()
+                one = df_viz[[date_col, c]].dropna()
                 st.plotly_chart(
                     make_line_plot(
                         one,
                         date_col,
                         [c],
-                        outlier_flags[[c]] if c in outlier_flags.columns else None,
+                        (
+                            None
+                            if exclude_outliers_viz
+                            else (
+                                outlier_flags[[c]]
+                                if c in outlier_flags.columns
+                                else None
+                            )
+                        ),
                         [c] if c in apply_ma_cols else [],
                         ma_window,
                     ),
@@ -333,15 +365,15 @@ with TAB_TS:
                     key=f"ts_series_{c}",
                 )
         if len(y_cols) > 1:
-            corr = df_res[y_cols].corr()
+            corr = df_viz[y_cols].corr()
             st.plotly_chart(
                 px.imshow(corr, text_auto=True, aspect="auto", title="Correlation"),
                 use_container_width=True,
                 key="ts_correlation",
             )
-            norm_df = df_res[[date_col]].copy()
+            norm_df = df_viz[[date_col]].copy()
             for c in y_cols:
-                vals = pd.to_numeric(df_res[c], errors="coerce")
+                vals = pd.to_numeric(df_viz[c], errors="coerce")
                 vmin, vmax = vals.min(), vals.max()
                 norm_df[c] = (vals - vmin) / (vmax - vmin) if vmax > vmin else 0.0
             fig_norm = go.Figure()
@@ -599,6 +631,36 @@ with TAB_REG:
             st.info("Select at least one independent variable.")
         else:
             df_reg = df_res[[dep_col] + indep_cols].dropna()
+            # Optional filters to remove unwanted regions (e.g., left-side points)
+            with st.expander(
+                "Filters (Regression) — adjust ranges to exclude outliers or left clusters",
+                expanded=True,
+            ):
+                filters = {}
+                base_df = df_reg.copy()
+                for c in [dep_col] + indep_cols:
+                    vals = pd.to_numeric(base_df[c], errors="coerce")
+                    lo, hi = float(vals.min()), float(vals.max())
+                    if np.isfinite(lo) and np.isfinite(hi) and lo < hi:
+                        step = (hi - lo) / 100.0 if (hi - lo) > 0 else 1.0
+                        sel = st.slider(
+                            f"{c} range",
+                            min_value=lo,
+                            max_value=hi,
+                            value=(lo, hi),
+                            step=step,
+                            key=f"reg_range_{c}",
+                        )
+                        filters[c] = sel
+                # Apply filters
+                orig_n = len(df_reg)
+                for c, (lo, hi) in filters.items():
+                    v = pd.to_numeric(df_reg[c], errors="coerce")
+                    df_reg = df_reg[(v >= lo) & (v <= hi)]
+                if len(df_reg) != orig_n:
+                    st.caption(
+                        f"Filtered rows: {orig_n - len(df_reg)} removed, {len(df_reg)} kept."
+                    )
             if len(df_reg) < 5:
                 st.info("Need at least 5 rows after dropping NA.")
             else:
