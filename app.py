@@ -344,23 +344,27 @@ with TAB_TS:
         with st.expander("Individual series", expanded=False):
             for c in y_cols:
                 one = df_viz[[date_col, c]].dropna()
-                st.plotly_chart(
-                    make_line_plot(
-                        one,
-                        date_col,
-                        [c],
-                        (
-                            None
-                            if exclude_outliers_viz
-                            else (
-                                outlier_flags[[c]]
-                                if c in outlier_flags.columns
-                                else None
-                            )
-                        ),
-                        [c] if c in apply_ma_cols else [],
-                        ma_window,
+                fig_ind = make_line_plot(
+                    one,
+                    date_col,
+                    [c],
+                    (
+                        None
+                        if exclude_outliers_viz
+                        else (
+                            outlier_flags[[c]] if c in outlier_flags.columns else None
+                        )
                     ),
+                    [c] if c in apply_ma_cols else [],
+                    ma_window,
+                )
+                fig_ind.update_layout(
+                    title=str(c),
+                    xaxis_title=str(date_col),
+                    yaxis_title=str(c),
+                )
+                st.plotly_chart(
+                    fig_ind,
                     use_container_width=True,
                     key=f"ts_series_{c}",
                 )
@@ -729,7 +733,6 @@ with TAB_REG:
                             st.write(
                                 f"Predicted {dep_col}: {pred:.3f} (±{rmse_sel:.3f} RMSE, actual unavailable)"
                             )
-
 with TAB_DL:
     st.subheader("Downloads")
     cleaned_csv = df_res.to_csv(index=False).encode("utf-8")
