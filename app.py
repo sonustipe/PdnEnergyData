@@ -16,6 +16,8 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from features import add_features
+from modeling import train_compare
 
 st.set_page_config(page_title="Production Dashboard", layout="wide")
 
@@ -284,8 +286,16 @@ test_size = st.sidebar.slider("Test size frac", 0.05, 0.5, 0.2, 0.05)
 poly_degree = st.sidebar.slider("Poly degree", 2, 6, 3, 1)
 skip_outliers_model = st.sidebar.checkbox("Ignore outliers while training", value=True)
 
-TAB_OVERVIEW, TAB_TS, TAB_MODEL, TAB_REG, TAB_DL, TAB_HELP = st.tabs(
-    ["Overview", "Time Series", "Modeling", "Regression", "Downloads", "Help"]
+TAB_OVERVIEW, TAB_TS, TAB_MODEL, TAB_REG, TAB_ENERGY, TAB_DL, TAB_HELP = st.tabs(
+    [
+        "Overview",
+        "Time Series",
+        "Modeling",
+        "Regression",
+        "Energy Modeling",
+        "Downloads",
+        "Help",
+    ]
 )
 
 with TAB_OVERVIEW:
@@ -733,6 +743,384 @@ with TAB_REG:
                             st.write(
                                 f"Predicted {dep_col}: {pred:.3f} (±{rmse_sel:.3f} RMSE, actual unavailable)"
                             )
+
+with TAB_ENERGY:
+    st.subheader("Energy Modeling")
+    st.markdown(
+        "Use monthly degassing station data to model fuel gas and electricity consumption and intensities."
+    )
+
+    # Data & Features
+    st.markdown("### Data & Features")
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        energy_file = st.file_uploader(
+            "Upload monthly CSV/XLSX", type=["csv", "xlsx"], key="energy_upload"
+        )
+    with c2:
+        if st.button("Use example data", key="energy_example"):
+            example = pd.DataFrame(
+                {
+                    "date": pd.date_range("2022-01-01", periods=24, freq="MS"),
+                    "crude": np.random.uniform(100, 200, 24).round(1),
+                    "water": np.random.uniform(50, 120, 24).round(1),
+                    "gas": np.random.uniform(10, 30, 24).round(1),
+                    "amb_temp": np.random.uniform(20, 40, 24).round(1),
+                    "fuel_gas": np.random.uniform(3, 8, 24).round(2),
+                    "electricity": np.random.uniform(1500, 3000, 24).round(0),
+                }
+            )
+            st.session_state["energy_df_raw"] = example
+    base_temp = st.selectbox(
+        "Base temperature for CDD (°C)",
+        options=[20.0, 22.0, 24.0, 25.0, 26.0, 28.0, 30.0],
+        index=3,
+        key="energy_base",
+    )
+
+    # Read upload
+    energy_df_raw = st.session_state.get("energy_df_raw")
+    if energy_file is not None:
+        if energy_file.name.lower().endswith(".csv"):
+            energy_df_raw = pd.read_csv(energy_file)
+        else:
+            energy_df_raw = pd.read_excel(energy_file)
+        st.session_state["energy_df_raw"] = energy_df_raw
+
+    if energy_df_raw is None:
+        st.info("Upload a file or use the example data.")
+    else:
+        # Sidebar controls
+        with st.sidebar.expander("Energy Data: Cleaning & Features", expanded=True):
+            mv = st.selectbox(
+                "Missing values",
+                ["none", "ffill", "bfill", "interp"],
+                index=0,
+                key="energy_mv",
+            )
+            out_m = st.selectbox(
+                "Outliers method", ["zscore", "iqr"], index=1, key="energy_out_m"
+            )
+            z_thr = (
+                st.slider("Z threshold", 2.0, 5.0, 3.0, 0.1, key="energy_z")
+                if out_m == "zscore"
+                else None
+            )
+            iqr_thr = (
+                st.slider("IQR multiplier", 0.5, 5.0, 1.5, 0.1, key="energy_iqr")
+                if out_m == "iqr"
+                else 1.5
+            )
+
+        # Prepare
+        edf = energy_df_raw.copy()
+        edf.columns = [str(c).strip().lower() for c in edf.columns]
+        if "date" not in edf.columns:
+            st.error("Energy data needs a 'date' column.")
+        else:
+            edf["date"] = pd.to_datetime(edf["date"], errors="coerce")
+            edf = edf.dropna(subset=["date"]).sort_values("date")
+            edf = edf.set_index("date").asfreq("MS").reset_index()
+
+            if mv != "none":
+                num_cols = [c for c in edf.columns if c != "date"]
+                if mv == "ffill":
+                    edf[num_cols] = edf[num_cols].ffill()
+                elif mv == "bfill":
+                    edf[num_cols] = edf[num_cols].bfill()
+                else:
+                    edf[num_cols] = edf[num_cols].interpolate(limit_direction="both")
+
+            # Outlier flags on core numeric columns
+            core_cols = [
+                c
+                for c in [
+                    "crude",
+                    "water",
+                    "gas",
+                    "amb_temp",
+                    "fuel_gas",
+                    "electricity",
+                ]
+                if c in edf.columns
+            ]
+            flags_energy = detect_outliers(
+                edf,
+                core_cols,
+                method=out_m,
+                z_thresh=z_thr if z_thr else 3.0,
+                iqr_mult=iqr_thr,
+            )
+
+            # Features
+            edf_feat = add_features(edf, base_temp=float(base_temp))
+            st.dataframe(edf_feat.tail(12), use_container_width=True)
+
+            # Feature/Target selection (Sidebar)
+            with st.sidebar.expander(
+                "Energy Modeling: Select target & features", expanded=True
+            ):
+                all_features = [
+                    c
+                    for c in edf_feat.columns
+                    if c
+                    not in [
+                        "date",
+                        "fuel_gas",
+                        "electricity",
+                        "fg_intensity",
+                        "el_intensity",
+                    ]
+                ]
+                target = st.selectbox(
+                    "Target",
+                    options=["fuel_gas", "electricity", "fg_intensity", "el_intensity"],
+                    index=0,
+                    key="energy_target",
+                )
+                sel_feats = st.multiselect(
+                    "Features",
+                    options=all_features,
+                    default=[
+                        c
+                        for c in [
+                            "total_liquid",
+                            "CDD",
+                            "crude_rm3",
+                            "gas_rm3",
+                            "amb_temp_rm3",
+                        ]
+                        if c in all_features
+                    ],
+                    key="energy_feats",
+                )
+
+            # Model comparison
+            st.markdown("### Model Comparison")
+            metrics_e, fitted_e, preds_e = train_compare(
+                edf_feat, target=target, feature_cols=sel_feats
+            )
+            if metrics_e.empty:
+                st.info("Not enough data after cleaning/feature selection.")
+            else:
+                # Highlight best (smallest RMSE)
+                best_row = metrics_e.iloc[metrics_e["RMSE"].astype(float).argmin()]
+                best_name = str(best_row["Model"])
+                st.dataframe(
+                    metrics_e.style.highlight_min(subset=["RMSE"], color="#d1ffd1"),
+                    use_container_width=True,
+                )
+
+                # Actual vs Predicted
+                st.markdown("### Actual vs Predicted")
+                if not preds_e.empty:
+                    fig_ap = go.Figure()
+                    x_vals = (
+                        edf_feat["date"]
+                        if "date" in edf_feat.columns
+                        else np.arange(len(preds_e))
+                    )
+                    fig_ap.add_trace(
+                        go.Scatter(
+                            x=x_vals,
+                            y=edf_feat[target],
+                            mode="lines+markers",
+                            name="Actual",
+                        )
+                    )
+                    if best_name in preds_e.columns:
+                        fig_ap.add_trace(
+                            go.Scatter(
+                                x=x_vals,
+                                y=preds_e[best_name],
+                                mode="lines",
+                                name=f"Predicted ({best_name})",
+                            )
+                        )
+                    fig_ap.update_layout(
+                        hovermode="x unified",
+                        margin=dict(l=10, r=10, t=40, b=10),
+                        xaxis_title="date",
+                        yaxis_title=target,
+                    )
+                    st.plotly_chart(
+                        fig_ap, use_container_width=True, key="energy_actual_pred"
+                    )
+
+                # Importance / coefficients
+                if best_name in fitted_e:
+                    best_model = fitted_e[best_name]
+                    st.markdown("#### Feature importance / coefficients")
+                    imp_vals = None
+                    try:
+                        # Tree-based
+                        if hasattr(best_model, "feature_importances_"):
+                            imp_vals = np.array(best_model.feature_importances_)
+                        elif hasattr(best_model, "named_steps"):
+                            last = best_model.named_steps.get("model")
+                            if last is not None and hasattr(last, "coef_"):
+                                coef = np.ravel(last.coef_)
+                                imp_vals = np.abs(coef)
+                        elif hasattr(best_model, "coef_"):
+                            coef = np.ravel(best_model.coef_)
+                            imp_vals = np.abs(coef)
+                    except Exception:
+                        imp_vals = None
+
+                    if imp_vals is not None and len(imp_vals) == len(sel_feats):
+                        imp_df = pd.DataFrame(
+                            {"feature": sel_feats, "importance": imp_vals}
+                        ).sort_values("importance", ascending=False)
+                        st.plotly_chart(
+                            px.bar(
+                                imp_df,
+                                x="importance",
+                                y="feature",
+                                orientation="h",
+                                title=f"{best_name} importance",
+                            ),
+                            use_container_width=True,
+                            key="energy_importance",
+                        )
+                    else:
+                        st.caption("Importance not available for the best model.")
+
+                # What-If Analysis
+                st.markdown("### What-If Analysis")
+                c1, c2 = st.columns(2)
+                with c1:
+                    crude_in = st.slider(
+                        "crude",
+                        0.0,
+                        float(
+                            edf_feat["crude"].max() * 1.5
+                            if "crude" in edf_feat
+                            else 300
+                        ),
+                        float(
+                            edf_feat["crude"].median() if "crude" in edf_feat else 150
+                        ),
+                        key="energy_crude",
+                    )
+                    water_in = st.slider(
+                        "water",
+                        0.0,
+                        float(
+                            edf_feat["water"].max() * 1.5
+                            if "water" in edf_feat
+                            else 300
+                        ),
+                        float(
+                            edf_feat["water"].median() if "water" in edf_feat else 100
+                        ),
+                        key="energy_water",
+                    )
+                    gas_in = st.slider(
+                        "gas",
+                        0.0,
+                        float(
+                            edf_feat["gas"].max() * 1.5 if "gas" in edf_feat else 100
+                        ),
+                        float(edf_feat["gas"].median() if "gas" in edf_feat else 20),
+                        key="energy_gas",
+                    )
+                    amb_in = st.slider("amb_temp", 0.0, 50.0, 30.0, key="energy_amb")
+                with c2:
+                    wc_override = st.checkbox(
+                        "Override water_cut", value=False, key="energy_wc_ov"
+                    )
+                    wc_val = (
+                        st.slider(
+                            "water_cut (0-1)", 0.0, 1.0, 0.3, 0.01, key="energy_wc"
+                        )
+                        if wc_override
+                        else None
+                    )
+                    gor_override = st.checkbox(
+                        "Override GOR", value=False, key="energy_gor_ov"
+                    )
+                    gor_val = (
+                        st.slider(
+                            "GOR",
+                            0.0,
+                            float(
+                                max(
+                                    1.0,
+                                    edf_feat["gor"].max() if "gor" in edf_feat else 10,
+                                )
+                            ),
+                            2.0,
+                            0.1,
+                            key="energy_gor",
+                        )
+                        if gor_override
+                        else None
+                    )
+
+                scenario = pd.DataFrame(
+                    {
+                        "date": [pd.Timestamp.today().replace(day=1)],
+                        "crude": [crude_in],
+                        "water": [water_in],
+                        "gas": [gas_in],
+                        "amb_temp": [amb_in],
+                        "fuel_gas": [0.0],
+                        "electricity": [0.0],
+                    }
+                )
+                scen_feat = add_features(scenario, base_temp=float(base_temp))
+                if wc_override:
+                    scen_feat["water_cut"] = wc_val
+                if gor_override and gor_val is not None:
+                    scen_feat["gor"] = gor_val
+
+                # Predict both fuel_gas and electricity using best-by-RMSE models for each target separately
+                preds_out = {}
+                for tgt in ["fuel_gas", "electricity", "fg_intensity", "el_intensity"]:
+                    met_t, fit_t, _ = train_compare(
+                        edf_feat, target=tgt, feature_cols=sel_feats
+                    )
+                    if not met_t.empty:
+                        best_t = met_t.iloc[met_t["RMSE"].astype(float).argmin()][
+                            "Model"
+                        ]
+                        model_t = fit_t.get(str(best_t))
+                        if model_t is not None:
+                            Xs = scen_feat[sel_feats].to_numpy()
+                            try:
+                                preds_out[tgt] = float(model_t.predict(Xs)[0])
+                            except Exception:
+                                preds_out[tgt] = np.nan
+                st.write(
+                    {
+                        k: round(v, 3) if v is not None and np.isfinite(v) else v
+                        for k, v in preds_out.items()
+                    }
+                )
+
+                # Downloads
+                st.markdown("### Downloads")
+                st.download_button(
+                    "⬇️ Data with features (CSV)",
+                    edf_feat.to_csv(index=False).encode("utf-8"),
+                    file_name="energy_features.csv",
+                )
+                st.download_button(
+                    "⬇️ Metrics (CSV)",
+                    metrics_e.to_csv(index=False).encode("utf-8"),
+                    file_name="energy_metrics.csv",
+                )
+                if not preds_e.empty:
+                    pred_csv = (
+                        pd.concat([edf_feat[["date", target]], preds_e], axis=1)
+                        .to_csv(index=False)
+                        .encode("utf-8")
+                    )
+                    st.download_button(
+                        "⬇️ Predictions (CSV)",
+                        pred_csv,
+                        file_name="energy_predictions.csv",
+                    )
 with TAB_DL:
     st.subheader("Downloads")
     cleaned_csv = df_res.to_csv(index=False).encode("utf-8")
