@@ -989,40 +989,73 @@ with TAB_ENERGY:
                 st.markdown("### What-If Analysis")
                 c1, c2 = st.columns(2)
                 with c1:
+                    # crude slider with safe bounds
+                    if "crude" in edf_feat:
+                        s = pd.to_numeric(edf_feat["crude"], errors="coerce")
+                        _max = (
+                            float(np.nanmax(s)) if np.isfinite(np.nanmax(s)) else np.nan
+                        )
+                        _med = (
+                            float(np.nanmedian(s))
+                            if np.isfinite(np.nanmedian(s))
+                            else np.nan
+                        )
+                    else:
+                        _max, _med = np.nan, np.nan
+                    lo, hi = 0.0, (_max * 1.5 if np.isfinite(_max) else 300.0)
+                    if not np.isfinite(hi) or hi <= lo:
+                        hi = 300.0
+                    default = _med if np.isfinite(_med) else 150.0
+                    default = min(max(default, lo), hi)
+                    step = max((hi - lo) / 100.0, 0.01)
                     crude_in = st.slider(
-                        "crude",
-                        0.0,
-                        float(
-                            edf_feat["crude"].max() * 1.5
-                            if "crude" in edf_feat
-                            else 300
-                        ),
-                        float(
-                            edf_feat["crude"].median() if "crude" in edf_feat else 150
-                        ),
-                        key="energy_crude",
+                        "crude", lo, hi, default, step=step, key="energy_crude"
                     )
+
+                    # water slider with safe bounds
+                    if "water" in edf_feat:
+                        s = pd.to_numeric(edf_feat["water"], errors="coerce")
+                        _max = (
+                            float(np.nanmax(s)) if np.isfinite(np.nanmax(s)) else np.nan
+                        )
+                        _med = (
+                            float(np.nanmedian(s))
+                            if np.isfinite(np.nanmedian(s))
+                            else np.nan
+                        )
+                    else:
+                        _max, _med = np.nan, np.nan
+                    lo, hi = 0.0, (_max * 1.5 if np.isfinite(_max) else 300.0)
+                    if not np.isfinite(hi) or hi <= lo:
+                        hi = 300.0
+                    default = _med if np.isfinite(_med) else 100.0
+                    default = min(max(default, lo), hi)
+                    step = max((hi - lo) / 100.0, 0.01)
                     water_in = st.slider(
-                        "water",
-                        0.0,
-                        float(
-                            edf_feat["water"].max() * 1.5
-                            if "water" in edf_feat
-                            else 300
-                        ),
-                        float(
-                            edf_feat["water"].median() if "water" in edf_feat else 100
-                        ),
-                        key="energy_water",
+                        "water", lo, hi, default, step=step, key="energy_water"
                     )
+
+                    # gas slider with safe bounds
+                    if "gas" in edf_feat:
+                        s = pd.to_numeric(edf_feat["gas"], errors="coerce")
+                        _max = (
+                            float(np.nanmax(s)) if np.isfinite(np.nanmax(s)) else np.nan
+                        )
+                        _med = (
+                            float(np.nanmedian(s))
+                            if np.isfinite(np.nanmedian(s))
+                            else np.nan
+                        )
+                    else:
+                        _max, _med = np.nan, np.nan
+                    lo, hi = 0.0, (_max * 1.5 if np.isfinite(_max) else 100.0)
+                    if not np.isfinite(hi) or hi <= lo:
+                        hi = 100.0
+                    default = _med if np.isfinite(_med) else 20.0
+                    default = min(max(default, lo), hi)
+                    step = max((hi - lo) / 100.0, 0.01)
                     gas_in = st.slider(
-                        "gas",
-                        0.0,
-                        float(
-                            edf_feat["gas"].max() * 1.5 if "gas" in edf_feat else 100
-                        ),
-                        float(edf_feat["gas"].median() if "gas" in edf_feat else 20),
-                        key="energy_gas",
+                        "gas", lo, hi, default, step=step, key="energy_gas"
                     )
                     amb_in = st.slider("amb_temp", 0.0, 50.0, 30.0, key="energy_amb")
                 with c2:
@@ -1039,23 +1072,32 @@ with TAB_ENERGY:
                     gor_override = st.checkbox(
                         "Override GOR", value=False, key="energy_gor_ov"
                     )
-                    gor_val = (
-                        st.slider(
+                    if gor_override:
+                        if "gor" in edf_feat:
+                            s = pd.to_numeric(edf_feat["gor"], errors="coerce")
+                            gmax = (
+                                float(np.nanmax(s))
+                                if np.isfinite(np.nanmax(s))
+                                else np.nan
+                            )
+                        else:
+                            gmax = np.nan
+                        lo, hi = 0.0, (
+                            float(max(1.0, gmax)) if np.isfinite(gmax) else 10.0
+                        )
+                        if not np.isfinite(hi) or hi <= lo:
+                            hi = 10.0
+                        step = max((hi - lo) / 100.0, 0.01)
+                        gor_val = st.slider(
                             "GOR",
-                            0.0,
-                            float(
-                                max(
-                                    1.0,
-                                    edf_feat["gor"].max() if "gor" in edf_feat else 10,
-                                )
-                            ),
-                            2.0,
-                            0.1,
+                            lo,
+                            hi,
+                            min(max(2.0, lo), hi),
+                            step=step,
                             key="energy_gor",
                         )
-                        if gor_override
-                        else None
-                    )
+                    else:
+                        gor_val = None
 
                 scenario = pd.DataFrame(
                     {

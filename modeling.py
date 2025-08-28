@@ -43,6 +43,8 @@ def train_compare(
     """
     if df is None or df.empty:
         return pd.DataFrame(), {}, pd.DataFrame()
+    if not feature_cols:
+        return pd.DataFrame(), {}, pd.DataFrame()
     data = df.copy()
     # Drop rows with NA in target or features
     cols = [target] + feature_cols
@@ -52,6 +54,10 @@ def train_compare(
 
     X = data[feature_cols].to_numpy()
     y = data[target].to_numpy()
+    n_samples = len(data)
+    n_features = X.shape[1] if X is not None else 0
+    if n_samples == 0 or n_features == 0:
+        return pd.DataFrame(), {}, pd.DataFrame()
 
     # Pipelines
     numeric_features = list(range(X.shape[1]))
@@ -69,40 +75,72 @@ def train_compare(
         "GradientBoosting": GradientBoostingRegressor(random_state=42),
     }
 
-    # TimeSeriesSplit
-    tscv = TimeSeriesSplit(n_splits=min(5, max(2, len(data) // 12)))
     results: List[ModelResult] = []
-
-    for name, est in candidates.items():
-        y_true_all: List[float] = []
-        y_pred_all: List[float] = []
-        for train_idx, test_idx in tscv.split(X):
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
-            est.fit(X_train, y_train)
-            pred = est.predict(X_test)
-            y_true_all.extend(y_test.tolist())
-            y_pred_all.extend(pred.tolist())
-        rmse = (
-            float(np.sqrt(mean_squared_error(y_true_all, y_pred_all)))
-            if y_true_all
-            else np.nan
-        )
-        r2 = float(r2_score(y_true_all, y_pred_all)) if y_true_all else np.nan
-        mape = (
-            _mape(np.array(y_true_all), np.array(y_pred_all)) if y_true_all else np.nan
-        )
-        results.append(
-            ModelResult(
-                name=name,
-                rmse=rmse,
-                mape=mape,
-                r2=r2,
-                model=est,
-                y_true=np.array(y_true_all),
-                y_pred=np.array(y_pred_all),
+    if n_samples <= 2:
+        # Fit on full data; metrics as NaN
+        for name, est in candidates.items():
+            try:
+                est.fit(X, y)
+                pred_full = est.predict(X)
+                results.append(
+                    ModelResult(
+                        name=name,
+                        rmse=np.nan,
+                        mape=np.nan,
+                        r2=np.nan,
+                        model=est,
+                        y_true=y.copy(),
+                        y_pred=np.array(pred_full),
+                    )
+                )
+            except Exception:
+                results.append(
+                    ModelResult(
+                        name=name,
+                        rmse=np.nan,
+                        mape=np.nan,
+                        r2=np.nan,
+                        model=est,
+                        y_true=y.copy(),
+                        y_pred=np.array([]),
+                    )
+                )
+    else:
+        # TimeSeriesSplit with valid number of splits
+        n_splits = min(5, max(2, n_samples - 1))
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+        for name, est in candidates.items():
+            y_true_all: List[float] = []
+            y_pred_all: List[float] = []
+            for train_idx, test_idx in tscv.split(X):
+                X_train, X_test = X[train_idx], X[test_idx]
+                y_train, y_test = y[train_idx], y[test_idx]
+                est.fit(X_train, y_train)
+                pred = est.predict(X_test)
+                y_true_all.extend(y_test.tolist())
+                y_pred_all.extend(pred.tolist())
+            rmse = (
+                float(np.sqrt(mean_squared_error(y_true_all, y_pred_all)))
+                if y_true_all
+                else np.nan
             )
-        )
+            r2 = float(r2_score(y_true_all, y_pred_all)) if y_true_all else np.nan
+            mape = (
+                _mape(np.array(y_true_all), np.array(y_pred_all))
+                if y_true_all
+                else np.nan
+            )
+            results.append(
+                ModelResult(
+                    name=name,
+                    rmse=rmse,
+                    mape=mape,
+                    r2=r2,
+                    model=est,
+                    y_true=np.array(y_true_all),
+                    y_pred=np.array(y_pred_all),
+                )
+            )
 
     # Pick best by RMSE
     results_sorted = sorted(
