@@ -410,6 +410,32 @@ with TAB_TS:
             })
             result_df = result_df.sort_values('Correlation', key=lambda x: abs(x), ascending=False)
             st.table(result_df)
+
+            # Show regression plots for each parameter
+            st.subheader(f'Regression Plots: {selected_param} vs Other Parameters')
+            import plotly.graph_objs as go
+            from sklearn.linear_model import LinearRegression
+            from sklearn.metrics import r2_score
+            for other_param in result_df.index:
+                x = pd.to_numeric(df_viz[other_param], errors='coerce').values.reshape(-1, 1)
+                y = pd.to_numeric(df_viz[selected_param], errors='coerce').values
+                mask = ~np.isnan(x.flatten()) & ~np.isnan(y)
+                if np.sum(mask) > 2:
+                    model = LinearRegression()
+                    model.fit(x[mask], y[mask])
+                    y_pred = model.predict(x[mask])
+                    r2 = r2_score(y[mask], y_pred)
+                    slope = model.coef_[0]
+                    intercept = model.intercept_
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=x[mask].flatten(), y=y[mask], mode='markers', name='Data'))
+                    fig.add_trace(go.Scatter(x=x[mask].flatten(), y=y_pred, mode='lines', name='Regression Line'))
+                    fig.update_layout(
+                        title=f'{selected_param} vs {other_param} (R²={r2:.4f})',
+                        xaxis_title=other_param,
+                        yaxis_title=selected_param
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
             norm_df = df_viz[[date_col]].copy()
             for c in y_cols:
                 vals = pd.to_numeric(df_viz[c], errors="coerce")
