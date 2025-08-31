@@ -385,6 +385,31 @@ with TAB_TS:
                 use_container_width=True,
                 key="ts_correlation",
             )
+            # User selects a parameter to view its correlations
+            selected_param = st.selectbox('Select a parameter to view its correlations:', corr.columns, key='corr_param_select')
+            # Get correlations for the selected parameter, sort by absolute value descending
+            corr_series = corr[selected_param].drop(selected_param).sort_values(key=lambda x: abs(x), ascending=False)
+            st.subheader(f'Correlation of {selected_param} with other parameters')
+            # Calculate R2 values for each parameter vs selected_param
+            r2_dict = {}
+            for other_param in corr_series.index:
+                x = pd.to_numeric(df_viz[other_param], errors='coerce').values.reshape(-1, 1)
+                y = pd.to_numeric(df_viz[selected_param], errors='coerce').values
+                mask = ~np.isnan(x.flatten()) & ~np.isnan(y)
+                if np.sum(mask) > 2:
+                    model = LinearRegression()
+                    model.fit(x[mask], y[mask])
+                    r2 = model.score(x[mask], y[mask])
+                else:
+                    r2 = np.nan
+                r2_dict[other_param] = r2
+            # Build DataFrame for display
+            result_df = pd.DataFrame({
+                'Correlation': corr_series,
+                'R2 (Linear Reg)': pd.Series(r2_dict)
+            })
+            result_df = result_df.sort_values('Correlation', key=lambda x: abs(x), ascending=False)
+            st.table(result_df)
             norm_df = df_viz[[date_col]].copy()
             for c in y_cols:
                 vals = pd.to_numeric(df_viz[c], errors="coerce")
