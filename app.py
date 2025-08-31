@@ -392,6 +392,51 @@ with TAB_TS:
             st.subheader(f'Correlation of {selected_param} with other parameters')
             # Calculate R2 values for each parameter vs selected_param
             r2_dict = {}
+            r2_full_dict = {}
+            r2_max_period = {}
+            r2_max_value = {}
+            # Determine max window size based on available data points
+            available_points = min([df_viz[other_param].dropna().shape[0] for other_param in corr_series.index] + [df_viz[selected_param].dropna().shape[0]])
+            min_window = st.sidebar.slider('Minimum points for max R² period', min_value=3, max_value=available_points, value=min(6, available_points), step=1)
+            for other_param in corr_series.index:
+                x_full = pd.to_numeric(df_viz[other_param], errors='coerce').values
+                y_full = pd.to_numeric(df_viz[selected_param], errors='coerce').values
+                mask_full = ~np.isnan(x_full) & ~np.isnan(y_full)
+                x = x_full[mask_full]
+                y = y_full[mask_full]
+                # R2 for full period
+                if len(x) > 1:
+                    model_full = LinearRegression()
+                    model_full.fit(x.reshape(-1, 1), y)
+                    y_pred_full = model_full.predict(x.reshape(-1, 1))
+                    r2_full = r2_score(y, y_pred_full)
+                else:
+                    r2_full = np.nan
+                r2_full_dict[other_param] = r2_full
+                # Max R2 period
+                best_r2 = None
+                best_period = None
+                if len(x) >= min_window:
+                    for i in range(len(x) - min_window + 1):
+                        x_win = x[i:i+min_window].reshape(-1, 1)
+                        y_win = y[i:i+min_window]
+                        model = LinearRegression()
+                        model.fit(x_win, y_win)
+                        y_pred_win = model.predict(x_win)
+                        r2_win = r2_score(y_win, y_pred_win)
+                        if (best_r2 is None) or (r2_win > best_r2):
+                            best_r2 = r2_win
+                            best_period = (i, i+min_window-1)
+                if best_period:
+                    if date_col in df_viz.columns:
+                        dates = df_viz[date_col][mask_full].iloc[best_period[0]:best_period[1]+1]
+                        r2_max_period[other_param] = f"{dates.iloc[0]} to {dates.iloc[-1]}"
+                    else:
+                        r2_max_period[other_param] = f"{best_period[0]} to {best_period[1]}"
+                    r2_max_value[other_param] = best_r2
+                else:
+                    r2_max_period[other_param] = "N/A"
+                    r2_max_value[other_param] = np.nan
             for other_param in corr_series.index:
                 x = pd.to_numeric(df_viz[other_param], errors='coerce').values.reshape(-1, 1)
                 y = pd.to_numeric(df_viz[selected_param], errors='coerce').values
@@ -406,7 +451,9 @@ with TAB_TS:
             # Build DataFrame for display
             result_df = pd.DataFrame({
                 'Correlation': corr_series,
-                'R2 (Linear Reg)': pd.Series(r2_dict)
+                'R2 (Full Period)': pd.Series(r2_full_dict),
+                'Max R2 Period': pd.Series(r2_max_period),
+                'Max R2 Value': pd.Series(r2_max_value)
             })
             result_df = result_df.sort_values('Correlation', key=lambda x: abs(x), ascending=False)
             st.table(result_df)
@@ -414,24 +461,22 @@ with TAB_TS:
             # Show regression plots for each parameter
             st.subheader(f'Regression Plots: {selected_param} vs Other Parameters')
             import plotly.graph_objs as go
-            from sklearn.linear_model import LinearRegression
-            from sklearn.metrics import r2_score
             for other_param in result_df.index:
-                x = pd.to_numeric(df_viz[other_param], errors='coerce').values.reshape(-1, 1)
-                y = pd.to_numeric(df_viz[selected_param], errors='coerce').values
-                mask = ~np.isnan(x.flatten()) & ~np.isnan(y)
-                if np.sum(mask) > 2:
-                    model = LinearRegression()
-                    model.fit(x[mask], y[mask])
-                    y_pred = model.predict(x[mask])
-                    r2 = r2_score(y[mask], y_pred)
-                    slope = model.coef_[0]
-                    intercept = model.intercept_
+                x_full = pd.to_numeric(df_viz[other_param], errors='coerce').values
+                y_full = pd.to_numeric(df_viz[selected_param], errors='coerce').values
+                mask_full = ~np.isnan(x_full) & ~np.isnan(y_full)
+                x = x_full[mask_full]
+                y = y_full[mask_full]
+                if len(x) > 1:
+                    model_full = LinearRegression()
+                    model_full.fit(x.reshape(-1, 1), y)
+                    y_pred_full = model_full.predict(x.reshape(-1, 1))
+                    r2_full = r2_score(y, y_pred_full)
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=x[mask].flatten(), y=y[mask], mode='markers', name='Data'))
-                    fig.add_trace(go.Scatter(x=x[mask].flatten(), y=y_pred, mode='lines', name='Regression Line'))
+                    fig.add_trace(go.Scatter(x=x, y=y, mode='markers', name='Data'))
+                    fig.add_trace(go.Scatter(x=x, y=y_pred_full, mode='lines', name='Regression Line'))
                     fig.update_layout(
-                        title=f'{selected_param} vs {other_param} (R²={r2:.4f})',
+                        title=f'{selected_param} vs {other_param} (R²={r2_full:.4f})',
                         xaxis_title=other_param,
                         yaxis_title=selected_param
                     )
