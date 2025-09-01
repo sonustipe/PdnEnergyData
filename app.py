@@ -380,8 +380,9 @@ with TAB_TS:
                 )
         if len(y_cols) > 1:
             corr = df_viz[y_cols].corr()
+            st.header('Correlation Matrix')
             st.plotly_chart(
-                px.imshow(corr, text_auto=True, aspect="auto", title="Correlation"),
+                px.imshow(corr, text_auto=True, aspect="auto", title="Correlation Matrix"),
                 use_container_width=True,
                 key="ts_correlation",
             )
@@ -430,7 +431,9 @@ with TAB_TS:
                 if best_period:
                     if date_col in df_viz.columns:
                         dates = df_viz[date_col][mask_full].iloc[best_period[0]:best_period[1]+1]
-                        r2_max_period[other_param] = f"{dates.iloc[0]} to {dates.iloc[-1]}"
+                        start_date = dates.iloc[0].strftime('%Y-%m-%d') if hasattr(dates.iloc[0], 'strftime') else str(dates.iloc[0])[:10]
+                        end_date = dates.iloc[-1].strftime('%Y-%m-%d') if hasattr(dates.iloc[-1], 'strftime') else str(dates.iloc[-1])[:10]
+                        r2_max_period[other_param] = f"{start_date} to {end_date}"
                     else:
                         r2_max_period[other_param] = f"{best_period[0]} to {best_period[1]}"
                     r2_max_value[other_param] = best_r2
@@ -457,6 +460,29 @@ with TAB_TS:
             })
             result_df = result_df.sort_values('Correlation', key=lambda x: abs(x), ascending=False)
             st.table(result_df)
+            # Download button for correlation table as CSV
+            # Prepare CSV with first cell as selected parameter and custom filename
+            custom_header = [selected_param] + [''] * (result_df.shape[1])
+            # Update max R2 period column header to include window size
+            cols = list(result_df.columns)
+            for i, col in enumerate(cols):
+                if col.startswith('Max R2 Period'):
+                    cols[i] = f'Max R2 Period (window={min_window})'
+            result_df.columns = cols
+            # Build CSV string
+            import io
+            output = io.StringIO()
+            output.write(','.join(custom_header) + '\n')
+            result_df.to_csv(output, index=True)
+            csv = output.getvalue().encode('utf-8')
+            # Custom filename
+            csv_filename = f"{selected_param}_vs_other_parameters.csv"
+            st.download_button(
+                label="Download correlation table as CSV",
+                data=csv,
+                file_name=csv_filename,
+                mime="text/csv"
+            )
 
             # Show regression plots for each parameter
             st.subheader(f'Regression Plots: {selected_param} vs Other Parameters')
@@ -734,111 +760,74 @@ with TAB_REG:
             "Dependent variable", options=numeric_cols, index=0, key="dep_variable"
         )
         indep_opts = [c for c in numeric_cols if c != dep_col]
-        indep_cols = st.multiselect(
-            "Independent variables", options=indep_opts, default=indep_opts[:1]
+        indep_col = st.selectbox(
+            "Independent variable", options=indep_opts, index=0, key="indep_variable"
         )
-        if not indep_cols:
-            st.info("Select at least one independent variable.")
-        else:
-            df_reg = df_res[[dep_col] + indep_cols].dropna()
-            # Optional filters to remove unwanted regions (e.g., left-side points)
-            with st.expander(
-                "Filters (Regression) — adjust ranges to exclude outliers or left clusters",
-                expanded=True,
-            ):
-                filters = {}
-                base_df = df_reg.copy()
-                for c in [dep_col] + indep_cols:
-                    vals = pd.to_numeric(base_df[c], errors="coerce")
-                    lo, hi = float(vals.min()), float(vals.max())
-                    if np.isfinite(lo) and np.isfinite(hi) and lo < hi:
-                        step = (hi - lo) / 100.0 if (hi - lo) > 0 else 1.0
-                        sel = st.slider(
-                            f"{c} range",
-                            min_value=lo,
-                            max_value=hi,
-                            value=(lo, hi),
-                            step=step,
-                            key=f"reg_range_{c}",
-                        )
-                        filters[c] = sel
-                # Apply filters
-                orig_n = len(df_reg)
-                for c, (lo, hi) in filters.items():
-                    v = pd.to_numeric(df_reg[c], errors="coerce")
-                    df_reg = df_reg[(v >= lo) & (v <= hi)]
-                if len(df_reg) != orig_n:
-                    st.caption(
-                        f"Filtered rows: {orig_n - len(df_reg)} removed, {len(df_reg)} kept."
-                    )
-            if len(df_reg) < 5:
-                st.info("Need at least 5 rows after dropping NA.")
-            else:
-                X = df_reg[indep_cols].to_numpy()
-                y = df_reg[dep_col].to_numpy()
-                metrics_r, preds_r, models_r = fit_models(
-                    X, y, test_size=test_size, poly_degree=poly_degree, random_state=42
-                )
-                st.dataframe(metrics_r, use_container_width=True)
-                st.plotly_chart(
-                    px.imshow(
-                        df_reg.corr(),
-                        text_auto=True,
-                        aspect="auto",
-                        title="Correlation",
-                    ),
-                    use_container_width=True,
-                    key="reg_correlation",
-                )
-                for c in indep_cols:
-                    st.plotly_chart(
-                        px.scatter(
-                            df_reg,
-                            x=c,
-                            y=dep_col,
-                            trendline="ols",
-                            title=f"{c} vs {dep_col}",
-                        ),
-                        use_container_width=True,
-                        key=f"reg_scatter_{c}",
-                    )
-                with st.expander("Manual prediction", expanded=False):
-                    mdl_name = st.selectbox(
-                        "Model", metrics_r["Model"].tolist(), index=0, key="reg_model"
-                    )
-                    inputs = []
-                    for c in indep_cols:
-                        inputs.append(
-                            st.number_input(
-                                c,
-                                value=float(df_reg[c].mean()),
-                                key=f"{c}_input_reg",
-                            )
-                        )
-                    if st.button("Predict", key="predict_reg"):
-                        mdl = models_r[mdl_name]
-                        pred = float(mdl.predict(np.array([inputs]))[0])
-                        rmse_sel = metrics_r.loc[
-                            metrics_r["Model"] == mdl_name, "RMSE"
-                        ].iloc[0]
-                        df_match = df_reg.copy()
-                        for col, val in zip(indep_cols, inputs):
-                            df_match = df_match.loc[np.isclose(df_match[col], val)]
-                        if len(df_match):
-                            actual_val = float(df_match[dep_col].iloc[0])
-                            abs_err = abs(pred - actual_val)
-                            pct_err = (
-                                abs_err / abs(actual_val) * 100
-                                if actual_val != 0
-                                else np.nan
-                            )
-                            st.write(
-                                f"Predicted {dep_col}: {pred:.3f} (actual {actual_val:.3f}, abs error {abs_err:.3f}, % error {pct_err:.2f}%, ±{rmse_sel:.3f} RMSE)"
-                            )
-                        else:
-                            st.write(
-                                f"Predicted {dep_col}: {pred:.3f} (±{rmse_sel:.3f} RMSE, actual unavailable)"
-                            )
+        df_reg = df_res[[dep_col, indep_col]].dropna()
+        # IQR slider for outlier removal
+        with st.expander(
+            "Filters (Regression) — adjust Z-score to remove outliers",
+            expanded=True,
+        ):
+            z_thresh = st.slider(
+                "Z-score threshold for outlier removal", min_value=1.0, max_value=4.0, value=3.0, step=0.1, key="zscore_thresh_reg"
+            )
+            vals = pd.to_numeric(df_reg[indep_col], errors="coerce")
+            mean, std = np.nanmean(vals), np.nanstd(vals)
+            z_scores = (vals - mean) / std if std > 0 else np.zeros_like(vals)
+            outlier_mask = np.abs(z_scores) > z_thresh
+            df_reg['outlier'] = outlier_mask
+            st.caption(f"Outliers marked in plot. {outlier_mask.sum()} outliers removed from regression fit.")
+        # Linear regression on filtered data
+
+    # 1. Outlier detection using regression residuals
+    st.markdown('### Outlier Detection: Regression Residuals')
+    X_all = df_reg[indep_col].values.reshape(-1, 1)
+    y_all = df_reg[dep_col].values
+    model_resid = LinearRegression().fit(X_all, y_all)
+    y_pred_all = model_resid.predict(X_all)
+    residuals = y_all - y_pred_all
+    resid_thresh = st.slider('Residual threshold (absolute)', min_value=0.0, max_value=float(np.nanmax(np.abs(residuals))), value=float(np.nanpercentile(np.abs(residuals), 95)), step=0.01, key='resid_thresh_reg')
+    resid_outlier_mask = np.abs(residuals) > resid_thresh
+    r2_resid = r2_score(y_all[~resid_outlier_mask], y_pred_all[~resid_outlier_mask]) if np.sum(~resid_outlier_mask) > 1 else np.nan
+    st.write(f'R² (residuals outliers removed): {r2_resid:.4f}')
+    fig_resid = go.Figure()
+    fig_resid.add_trace(go.Scatter(x=X_all[~resid_outlier_mask].flatten(), y=y_all[~resid_outlier_mask], mode='markers', name='Inliers'))
+    fig_resid.add_trace(go.Scatter(x=X_all[resid_outlier_mask].flatten(), y=y_all[resid_outlier_mask], mode='markers', marker=dict(color='red', symbol='x'), name='Outliers'))
+    fig_resid.add_trace(go.Scatter(x=X_all.flatten(), y=y_pred_all, mode='lines', name='Regression Line'))
+    fig_resid.update_layout(title=f'{dep_col} vs {indep_col} (Residual Outlier Detection)', xaxis_title=indep_col, yaxis_title=dep_col)
+    st.plotly_chart(fig_resid, use_container_width=True)
+
+    # 2. Cook’s Distance (influence measure)
+    st.markdown('### Outlier Detection: Cook’s Distance')
+    import statsmodels.api as sm
+    X_sm = sm.add_constant(X_all)
+    model_sm = sm.OLS(y_all, X_sm).fit()
+    infl = model_sm.get_influence()
+    cooks_d = infl.cooks_distance[0]
+    cooks_thresh = st.slider('Cook’s Distance threshold', min_value=0.0, max_value=float(np.nanmax(cooks_d)), value=0.5, step=0.01, key='cooks_thresh_reg')
+    cooks_outlier_mask = cooks_d > cooks_thresh
+    r2_cooks = r2_score(y_all[~cooks_outlier_mask], y_pred_all[~cooks_outlier_mask]) if np.sum(~cooks_outlier_mask) > 1 else np.nan
+    st.write(f'R² (Cook’s Distance outliers removed): {r2_cooks:.4f}')
+    fig_cooks = go.Figure()
+    fig_cooks.add_trace(go.Scatter(x=X_all[~cooks_outlier_mask].flatten(), y=y_all[~cooks_outlier_mask], mode='markers', name='Inliers'))
+    fig_cooks.add_trace(go.Scatter(x=X_all[cooks_outlier_mask].flatten(), y=y_all[cooks_outlier_mask], mode='markers', marker=dict(color='orange', symbol='x'), name='Influential Outliers'))
+    fig_cooks.add_trace(go.Scatter(x=X_all.flatten(), y=y_pred_all, mode='lines', name='Regression Line'))
+    fig_cooks.update_layout(title=f'{dep_col} vs {indep_col} (Cook’s Distance)', xaxis_title=indep_col, yaxis_title=dep_col)
+    st.plotly_chart(fig_cooks, use_container_width=True)
+
+    # 3. Robust Regression (HuberRegressor)
+    st.markdown('### Robust Regression (HuberRegressor)')
+    from sklearn.linear_model import HuberRegressor
+    huber = HuberRegressor().fit(X_all, y_all)
+    y_pred_huber = huber.predict(X_all)
+    r2_huber = r2_score(y_all, y_pred_huber)
+    st.write(f'R² (Robust Regression): {r2_huber:.4f}')
+    fig_huber = go.Figure()
+    fig_huber.add_trace(go.Scatter(x=X_all.flatten(), y=y_all, mode='markers', name='Data'))
+    fig_huber.add_trace(go.Scatter(x=X_all.flatten(), y=y_pred_huber, mode='lines', name='Robust Regression Line'))
+    fig_huber.update_layout(title=f'{dep_col} vs {indep_col} (Robust Regression)', xaxis_title=indep_col, yaxis_title=dep_col)
+    st.plotly_chart(fig_huber, use_container_width=True)
 
 with TAB_ENERGY:
     st.subheader("Energy Modeling")
