@@ -787,7 +787,27 @@ with TAB_REG:
     model_resid = LinearRegression().fit(X_all, y_all)
     y_pred_all = model_resid.predict(X_all)
     residuals = y_all - y_pred_all
-    resid_thresh = st.slider('Residual threshold (absolute)', min_value=0.0, max_value=float(np.nanmax(np.abs(residuals))), value=float(np.nanpercentile(np.abs(residuals), 95)), step=0.01, key='resid_thresh_reg')
+    abs_residuals = np.abs(residuals)
+    finite_residuals = abs_residuals[np.isfinite(abs_residuals)]
+    if finite_residuals.size:
+        resid_max = float(finite_residuals.max())
+        resid_default = float(np.percentile(finite_residuals, 95))
+        resid_default = min(resid_default, resid_max)
+        if resid_max > 0:
+            resid_thresh = st.slider(
+                'Residual threshold (absolute)',
+                min_value=0.0,
+                max_value=resid_max,
+                value=resid_default,
+                step=0.01,
+                key='resid_thresh_reg'
+            )
+        else:
+            resid_thresh = 0.0
+            st.caption('All residuals are zero. Threshold fixed at 0.')
+    else:
+        resid_thresh = 0.0
+        st.caption('Residuals could not be computed for the selected data.')
     resid_outlier_mask = np.abs(residuals) > resid_thresh
     r2_resid = r2_score(y_all[~resid_outlier_mask], y_pred_all[~resid_outlier_mask]) if np.sum(~resid_outlier_mask) > 1 else np.nan
     st.write(f'R² (residuals outliers removed): {r2_resid:.4f}')
@@ -805,7 +825,25 @@ with TAB_REG:
     model_sm = sm.OLS(y_all, X_sm).fit()
     infl = model_sm.get_influence()
     cooks_d = infl.cooks_distance[0]
-    cooks_thresh = st.slider('Cook’s Distance threshold', min_value=0.0, max_value=float(np.nanmax(cooks_d)), value=0.5, step=0.01, key='cooks_thresh_reg')
+    finite_cooks = cooks_d[np.isfinite(cooks_d)]
+    if finite_cooks.size:
+        cooks_max = float(finite_cooks.max())
+        cooks_default = 0.5 if cooks_max >= 0.5 else cooks_max
+        if cooks_max > 0:
+            cooks_thresh = st.slider(
+                'Cook’s Distance threshold',
+                min_value=0.0,
+                max_value=cooks_max,
+                value=cooks_default,
+                step=0.01,
+                key='cooks_thresh_reg'
+            )
+        else:
+            cooks_thresh = 0.0
+            st.caption('Cook’s Distance values are zero. Threshold fixed at 0.')
+    else:
+        cooks_thresh = 0.0
+        st.caption('Cook’s Distance could not be computed for the selected data.')
     cooks_outlier_mask = cooks_d > cooks_thresh
     r2_cooks = r2_score(y_all[~cooks_outlier_mask], y_pred_all[~cooks_outlier_mask]) if np.sum(~cooks_outlier_mask) > 1 else np.nan
     st.write(f'R² (Cook’s Distance outliers removed): {r2_cooks:.4f}')
