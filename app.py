@@ -763,7 +763,7 @@ with TAB_REG:
         indep_col = st.selectbox(
             "Independent variable", options=indep_opts, index=0, key="indep_variable"
         )
-        df_reg = df_res[[dep_col, indep_col]].dropna()
+        df_reg = df_res[[dep_col, indep_col]].dropna().copy()
         # IQR slider for outlier removal
         with st.expander(
             "Filters (Regression) — adjust Z-score to remove outliers",
@@ -780,92 +780,183 @@ with TAB_REG:
             st.caption(f"Outliers marked in plot. {outlier_mask.sum()} outliers removed from regression fit.")
         # Linear regression on filtered data
 
-    # 1. Outlier detection using regression residuals
-    st.markdown('### Outlier Detection: Regression Residuals')
-    X_all = df_reg[indep_col].values.reshape(-1, 1)
-    y_all = df_reg[dep_col].values
-    model_resid = LinearRegression().fit(X_all, y_all)
-    y_pred_all = model_resid.predict(X_all)
-    residuals = y_all - y_pred_all
-    abs_residuals = np.abs(residuals)
-    finite_residuals = abs_residuals[np.isfinite(abs_residuals)]
-    if finite_residuals.size:
-        resid_max = float(finite_residuals.max())
-        resid_default = float(np.percentile(finite_residuals, 95))
-        resid_default = min(resid_default, resid_max)
-        if resid_max > 0:
-            resid_thresh = st.slider(
-                'Residual threshold (absolute)',
-                min_value=0.0,
-                max_value=resid_max,
-                value=resid_default,
-                step=0.01,
-                key='resid_thresh_reg'
-            )
+        # 1. Outlier detection using regression residuals
+        if df_reg.empty:
+            st.info("Not enough data for regression after filtering.")
         else:
-            resid_thresh = 0.0
-            st.caption('All residuals are zero. Threshold fixed at 0.')
-    else:
-        resid_thresh = 0.0
-        st.caption('Residuals could not be computed for the selected data.')
-    resid_outlier_mask = np.abs(residuals) > resid_thresh
-    r2_resid = r2_score(y_all[~resid_outlier_mask], y_pred_all[~resid_outlier_mask]) if np.sum(~resid_outlier_mask) > 1 else np.nan
-    st.write(f'R² (residuals outliers removed): {r2_resid:.4f}')
-    fig_resid = go.Figure()
-    fig_resid.add_trace(go.Scatter(x=X_all[~resid_outlier_mask].flatten(), y=y_all[~resid_outlier_mask], mode='markers', name='Inliers'))
-    fig_resid.add_trace(go.Scatter(x=X_all[resid_outlier_mask].flatten(), y=y_all[resid_outlier_mask], mode='markers', marker=dict(color='red', symbol='x'), name='Outliers'))
-    fig_resid.add_trace(go.Scatter(x=X_all.flatten(), y=y_pred_all, mode='lines', name='Regression Line'))
-    fig_resid.update_layout(title=f'{dep_col} vs {indep_col} (Residual Outlier Detection)', xaxis_title=indep_col, yaxis_title=dep_col)
-    st.plotly_chart(fig_resid, use_container_width=True)
-
-    # 2. Cook’s Distance (influence measure)
-    st.markdown('### Outlier Detection: Cook’s Distance')
-    import statsmodels.api as sm
-    X_sm = sm.add_constant(X_all)
-    model_sm = sm.OLS(y_all, X_sm).fit()
-    infl = model_sm.get_influence()
-    cooks_d = infl.cooks_distance[0]
-    finite_cooks = cooks_d[np.isfinite(cooks_d)]
-    if finite_cooks.size:
-        cooks_max = float(finite_cooks.max())
-        cooks_default = 0.5 if cooks_max >= 0.5 else cooks_max
-        if cooks_max > 0:
-            cooks_thresh = st.slider(
-                'Cook’s Distance threshold',
-                min_value=0.0,
-                max_value=cooks_max,
-                value=cooks_default,
-                step=0.01,
-                key='cooks_thresh_reg'
+            st.markdown("### Outlier Detection: Regression Residuals")
+            X_all = df_reg[indep_col].values.reshape(-1, 1)
+            y_all = df_reg[dep_col].values
+            model_resid = LinearRegression().fit(X_all, y_all)
+            y_pred_all = model_resid.predict(X_all)
+            residuals = y_all - y_pred_all
+            abs_residuals = np.abs(residuals)
+            finite_residuals = abs_residuals[np.isfinite(abs_residuals)]
+            if finite_residuals.size:
+                resid_max = float(finite_residuals.max())
+                resid_default = float(np.percentile(finite_residuals, 95))
+                resid_default = min(resid_default, resid_max)
+                if resid_max > 0:
+                    resid_thresh = st.slider(
+                        "Residual threshold (absolute)",
+                        min_value=0.0,
+                        max_value=resid_max,
+                        value=resid_default,
+                        step=0.01,
+                        key="resid_thresh_reg",
+                    )
+                else:
+                    resid_thresh = 0.0
+                    st.caption("All residuals are zero. Threshold fixed at 0.")
+            else:
+                resid_thresh = 0.0
+                st.caption("Residuals could not be computed for the selected data.")
+            resid_outlier_mask = np.abs(residuals) > resid_thresh
+            r2_resid = (
+                r2_score(
+                    y_all[~resid_outlier_mask],
+                    y_pred_all[~resid_outlier_mask],
+                )
+                if np.sum(~resid_outlier_mask) > 1
+                else np.nan
             )
-        else:
-            cooks_thresh = 0.0
-            st.caption('Cook’s Distance values are zero. Threshold fixed at 0.')
-    else:
-        cooks_thresh = 0.0
-        st.caption('Cook’s Distance could not be computed for the selected data.')
-    cooks_outlier_mask = cooks_d > cooks_thresh
-    r2_cooks = r2_score(y_all[~cooks_outlier_mask], y_pred_all[~cooks_outlier_mask]) if np.sum(~cooks_outlier_mask) > 1 else np.nan
-    st.write(f'R² (Cook’s Distance outliers removed): {r2_cooks:.4f}')
-    fig_cooks = go.Figure()
-    fig_cooks.add_trace(go.Scatter(x=X_all[~cooks_outlier_mask].flatten(), y=y_all[~cooks_outlier_mask], mode='markers', name='Inliers'))
-    fig_cooks.add_trace(go.Scatter(x=X_all[cooks_outlier_mask].flatten(), y=y_all[cooks_outlier_mask], mode='markers', marker=dict(color='orange', symbol='x'), name='Influential Outliers'))
-    fig_cooks.add_trace(go.Scatter(x=X_all.flatten(), y=y_pred_all, mode='lines', name='Regression Line'))
-    fig_cooks.update_layout(title=f'{dep_col} vs {indep_col} (Cook’s Distance)', xaxis_title=indep_col, yaxis_title=dep_col)
-    st.plotly_chart(fig_cooks, use_container_width=True)
+            st.write(f"R² (residuals outliers removed): {r2_resid:.4f}")
+            fig_resid = go.Figure()
+            fig_resid.add_trace(
+                go.Scatter(
+                    x=X_all[~resid_outlier_mask].flatten(),
+                    y=y_all[~resid_outlier_mask],
+                    mode="markers",
+                    name="Inliers",
+                )
+            )
+            fig_resid.add_trace(
+                go.Scatter(
+                    x=X_all[resid_outlier_mask].flatten(),
+                    y=y_all[resid_outlier_mask],
+                    mode="markers",
+                    marker=dict(color="red", symbol="x"),
+                    name="Outliers",
+                )
+            )
+            fig_resid.add_trace(
+                go.Scatter(
+                    x=X_all.flatten(),
+                    y=y_pred_all,
+                    mode="lines",
+                    name="Regression Line",
+                )
+            )
+            fig_resid.update_layout(
+                title=f"{dep_col} vs {indep_col} (Residual Outlier Detection)",
+                xaxis_title=indep_col,
+                yaxis_title=dep_col,
+            )
+            st.plotly_chart(fig_resid, use_container_width=True)
 
-    # 3. Robust Regression (HuberRegressor)
-    st.markdown('### Robust Regression (HuberRegressor)')
-    from sklearn.linear_model import HuberRegressor
-    huber = HuberRegressor().fit(X_all, y_all)
-    y_pred_huber = huber.predict(X_all)
-    r2_huber = r2_score(y_all, y_pred_huber)
-    st.write(f'R² (Robust Regression): {r2_huber:.4f}')
-    fig_huber = go.Figure()
-    fig_huber.add_trace(go.Scatter(x=X_all.flatten(), y=y_all, mode='markers', name='Data'))
-    fig_huber.add_trace(go.Scatter(x=X_all.flatten(), y=y_pred_huber, mode='lines', name='Robust Regression Line'))
-    fig_huber.update_layout(title=f'{dep_col} vs {indep_col} (Robust Regression)', xaxis_title=indep_col, yaxis_title=dep_col)
-    st.plotly_chart(fig_huber, use_container_width=True)
+            # 2. Cook’s Distance (influence measure)
+            st.markdown("### Outlier Detection: Cook’s Distance")
+            import statsmodels.api as sm
+
+            X_sm = sm.add_constant(X_all)
+            model_sm = sm.OLS(y_all, X_sm).fit()
+            infl = model_sm.get_influence()
+            cooks_d = infl.cooks_distance[0]
+            finite_cooks = cooks_d[np.isfinite(cooks_d)]
+            if finite_cooks.size:
+                cooks_max = float(finite_cooks.max())
+                cooks_default = 0.5 if cooks_max >= 0.5 else cooks_max
+                if cooks_max > 0:
+                    cooks_thresh = st.slider(
+                        "Cook’s Distance threshold",
+                        min_value=0.0,
+                        max_value=cooks_max,
+                        value=cooks_default,
+                        step=0.01,
+                        key="cooks_thresh_reg",
+                    )
+                else:
+                    cooks_thresh = 0.0
+                    st.caption("Cook’s Distance values are zero. Threshold fixed at 0.")
+            else:
+                cooks_thresh = 0.0
+                st.caption(
+                    "Cook’s Distance could not be computed for the selected data."
+                )
+            cooks_outlier_mask = cooks_d > cooks_thresh
+            r2_cooks = (
+                r2_score(
+                    y_all[~cooks_outlier_mask],
+                    y_pred_all[~cooks_outlier_mask],
+                )
+                if np.sum(~cooks_outlier_mask) > 1
+                else np.nan
+            )
+            st.write(f"R² (Cook’s Distance outliers removed): {r2_cooks:.4f}")
+            fig_cooks = go.Figure()
+            fig_cooks.add_trace(
+                go.Scatter(
+                    x=X_all[~cooks_outlier_mask].flatten(),
+                    y=y_all[~cooks_outlier_mask],
+                    mode="markers",
+                    name="Inliers",
+                )
+            )
+            fig_cooks.add_trace(
+                go.Scatter(
+                    x=X_all[cooks_outlier_mask].flatten(),
+                    y=y_all[cooks_outlier_mask],
+                    mode="markers",
+                    marker=dict(color="orange", symbol="x"),
+                    name="Influential Outliers",
+                )
+            )
+            fig_cooks.add_trace(
+                go.Scatter(
+                    x=X_all.flatten(),
+                    y=y_pred_all,
+                    mode="lines",
+                    name="Regression Line",
+                )
+            )
+            fig_cooks.update_layout(
+                title=f"{dep_col} vs {indep_col} (Cook’s Distance)",
+                xaxis_title=indep_col,
+                yaxis_title=dep_col,
+            )
+            st.plotly_chart(fig_cooks, use_container_width=True)
+
+            # 3. Robust Regression (HuberRegressor)
+            st.markdown("### Robust Regression (HuberRegressor)")
+            from sklearn.linear_model import HuberRegressor
+
+            huber = HuberRegressor().fit(X_all, y_all)
+            y_pred_huber = huber.predict(X_all)
+            r2_huber = r2_score(y_all, y_pred_huber)
+            st.write(f"R² (Robust Regression): {r2_huber:.4f}")
+            fig_huber = go.Figure()
+            fig_huber.add_trace(
+                go.Scatter(
+                    x=X_all.flatten(),
+                    y=y_all,
+                    mode="markers",
+                    name="Data",
+                )
+            )
+            fig_huber.add_trace(
+                go.Scatter(
+                    x=X_all.flatten(),
+                    y=y_pred_huber,
+                    mode="lines",
+                    name="Robust Regression Line",
+                )
+            )
+            fig_huber.update_layout(
+                title=f"{dep_col} vs {indep_col} (Robust Regression)",
+                xaxis_title=indep_col,
+                yaxis_title=dep_col,
+            )
+            st.plotly_chart(fig_huber, use_container_width=True)
 
 with TAB_ENERGY:
     st.subheader("Energy Modeling")
